@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chute libre depuis la Tour de Pise</title>
+<style>
+body{font-family:Arial,sans-serif;background:#eef6ff;}
+.main-container{display:flex;justify-content:center;align-items:flex-start;gap:30px;margin-top:20px;}
+#canvas-container{position:relative;cursor:crosshair;}
+#coordinates{position:absolute;top:10px;left:10px;background:rgba(255,255,255,.9);padding:5px 10px;border-radius:5px;}
+canvas{border:1px solid #000;}
+button{margin:5px;padding:8px 15px;}
+table{border-collapse:collapse;}
+th,td{padding:5px 10px;text-align:center;}
+</style>
+</head>
+<body>
+
+<h1 style="text-align:center;">Chute libre depuis la Tour de Pise</h1>
+
+<div class="main-container">
+<div>
+<div id="canvas-container">
+<canvas id="simulation" width="500" height="700"></canvas>
+<div id="coordinates">Coordonnées (x,y) : (0.0 m,0.0 m)</div>
+</div>
+<div>
+<button id="nextStep">Chute (Pas à pas)</button>
+<button id="reset">Réinitialiser</button>
+</div>
+</div>
+
+<div>
+<h2>Points relevés (Pointage de la balle)</h2>
+<table border="1" id="dataTable">
+<thead><tr><th>N°</th><th>t (s)</th><th>x (m)</th><th>y (m)</th></tr></thead>
+<tbody></tbody>
+</table>
+<br>
+<button id="clearTable">Vider</button>
+<button id="exportCSV">Exporter CSV</button>
+</div>
+</div>
+
+<script>
+const canvas=document.getElementById("simulation");
+const ctx=canvas.getContext("2d");
+
+const g=9.81;
+const dt=0.2;
+const scale=10; 
+const groundY=640;
+
+const x0_m = 36.8;  
+const y0_m = 45.0;  
+
+let t_sim = 0; 
+let positions=[];
+let markedPoints=[];
+let pointCount=0;
+let mouseX=null, mouseY=null;
+
+function drawBackground(){
+ // 1. Ciel
+ const sky=ctx.createLinearGradient(0,0,0,700);
+ sky.addColorStop(0,"#74c6ff"); sky.addColorStop(1,"#eefaff");
+ ctx.fillStyle=sky; ctx.fillRect(0,0,500,700);
+
+ // 2. Nuages
+ ctx.fillStyle="rgba(255,255,255,.85)";
+ ctx.beginPath();
+ ctx.arc(80,100,25,0,Math.PI*2);
+ ctx.arc(110,90,30,0,Math.PI*2);
+ ctx.arc(140,100,25,0,Math.PI*2);
+ ctx.fill();
+
+ // 3. Sol
+ ctx.fillStyle="#67b43a"; ctx.fillRect(0,groundY,500,60);
+
+ // 4. DESSIN DE LA TOUR DE PISE
+ ctx.save();
+ // Inclinaison de la tour (5 degrés autour du point pivot 250, 450)
+ ctx.translate(250, 450);
+ ctx.rotate(5 * Math.PI / 180);
+ ctx.translate(-250, -450);
+
+ // Ombre au sol
+ ctx.fillStyle="rgba(0,0,0,0.15)";
+ ctx.beginPath(); 
+ if (ctx.ellipse) {
+   ctx.ellipse(250,620,120,20,0,0,Math.PI*2);
+ } else {
+   ctx.arc(250,620,60,0,Math.PI*2);
+ }
+ ctx.fill();
+
+ // Base de la tour
+ ctx.fillStyle="#d8d0c2"; ctx.strokeStyle="#8e8578"; ctx.lineWidth=2;
+ ctx.fillRect(130,600,220,45); ctx.strokeRect(130,600,220,45);
+
+ // Corps principal
+ ctx.fillStyle="#e7dfcf";
+ ctx.fillRect(145,180,190,420); ctx.strokeRect(145,180,190,420);
+
+ // Lignes des étages et arcades rectangles standards (compatibilité maximale)
+ ctx.strokeStyle="#a59d92"; ctx.lineWidth=1;
+ ctx.fillStyle="#cfc6b8";
+ const etagesY = [240, 300, 360, 420, 480, 540, 600];
+ 
+ etagesY.forEach((y, index) => {
+   if(index < etagesY.length - 1){
+     ctx.beginPath(); ctx.moveTo(145,y); ctx.lineTo(335,y); ctx.stroke();
+     // Dessin des 5 arcades par étage
+     for(let arc=0; arc<5; arc++){
+       let arcX = 165 + arc*30;
+       let arcY = y - 30;
+       ctx.fillRect(arcX, arcY, 15, 25);
+     }
+   }
+ });
+
+ // Sommet / Campanile
+ ctx.fillStyle="#e7dfcf"; ctx.strokeStyle="#8e8578"; ctx.lineWidth=2;
+ ctx.fillRect(175,120,130,60); ctx.strokeRect(175,120,130,60);
+
+ ctx.restore();
+}
+
+function drawBall(x,y){
+ ctx.beginPath();
+ ctx.arc(x*scale, groundY - y*scale, 6, 0, 2*Math.PI);
+ ctx.fillStyle="red";
+ ctx.fill();
+}
+
+function drawCross(x,y){
+ ctx.strokeStyle="blue";
+ ctx.lineWidth = 1.5;
+ ctx.beginPath();
+ ctx.moveTo(x-6,y-6); ctx.lineTo(x+6,y+6);
+ ctx.moveTo(x-6,y+6); ctx.lineTo(x+6,y-6);
+ ctx.stroke();
+}
+
+function drawGrid(){
+ ctx.strokeStyle="#ddd";
+ ctx.font = "12px Arial";
+ for(let i=0; i<=45; i+=5){
+   let y = groundY - i*scale;
+   ctx.beginPath(); 
+   ctx.moveTo(0,y); 
+   ctx.lineTo(canvas.width,y); 
+   ctx.stroke(); // Correction ici : bien rattaché à ctx
+   ctx.fillStyle="#000"; 
+   ctx.fillText(i+" m",10,y-2);
+ }
+}
+
+function calculatePosition(time){
+ let y = y0_m - 0.5 * g * time * time;
+ if (y < 0) y = 0; 
+ return { x: x0_m, y: y };
+}
+
+function updateCanvas(){
+ ctx.clearRect(0,0,500,700);
+ drawBackground();
+ drawGrid();
+ positions.forEach(p=>drawBall(p.x,p.y));
+ markedPoints.forEach(p=>drawCross(p.x,p.y));
+}
+
+// Initialisation
+positions.push({x: x0_m, y: y0_m, t: 0});
+
+document.getElementById("nextStep").onclick=()=>{
+ if (positions[positions.length - 1].y === 0) {
+   alert("La balle est déjà au sol !");
+   return;
+ }
+ t_sim += dt;
+ let pos = calculatePosition(t_sim);
+ positions.push({x: pos.x, y: pos.y, t: t_sim});
+ updateCanvas();
+};
+
+document.getElementById("reset").onclick=()=>{
+ t_sim = 0;
+ positions=[{x: x0_m, y: y0_m, t: 0}];
+ markedPoints=[];
+ pointCount=0;
+ document.querySelector("#dataTable tbody").innerHTML="";
+ updateCanvas();
+};
+
+canvas.addEventListener("mousemove",e=>{
+ const r=canvas.getBoundingClientRect();
+ mouseX=e.clientX-r.left;
+ mouseY=e.clientY-r.top;
+ const x_m=mouseX/scale;
+ const y_m=(groundY-mouseY)/scale;
+ document.getElementById("coordinates").textContent=`Coordonnées (x,y) : (${x_m.toFixed(1)} m, ${y_m.toFixed(1)} m)`;
+});
+
+canvas.addEventListener("click",()=>{
+ if(mouseX===null) return;
+
+ const clickedX_m = mouseX / scale;
+ const clickedY_m = (groundY - mouseY) / scale;
+
+ let closestBall = null;
+ let minDistance = Infinity;
+
+ positions.forEach(pos => {
+   let dist = Math.sqrt(Math.pow(pos.x - clickedX_m, 2) + Math.pow(pos.y - clickedY_m, 2));
+   if (dist < minDistance) {
+     minDistance = dist;
+     closestBall = pos;
+   }
+ });
+
+ if (minDistance > 3) return; 
+
+ const alreadyMarked = markedPoints.some(p => p.t === closestBall.t);
+ if (alreadyMarked) return;
+
+ pointCount++;
+ 
+ const row=document.createElement("tr");
+ row.innerHTML=`<td>${pointCount}</td>
+ <td>${closestBall.t.toFixed(1)}</td>
+ <td>${closestBall.x.toFixed(2)}</td>
+ <td>${closestBall.y.toFixed(2)}</td>`;
+ document.querySelector("#dataTable tbody").appendChild(row);
+
+ markedPoints.push({x: closestBall.x * scale, y: groundY - closestBall.y * scale, t: closestBall.t});
+ updateCanvas();
+});
+
+document.getElementById("clearTable").onclick=()=>{
+ document.querySelector("#dataTable tbody").innerHTML="";
+ pointCount=0;
+ markedPoints=[];
+ updateCanvas();
+};
+
+document.getElementById("exportCSV").onclick=()=>{
+ let csv="N;t;x;y\n";
+ document.querySelectorAll("#dataTable tbody tr").forEach(r=>{
+   csv += [...r.children].map(td=>td.textContent).join(";")+"\n";
+ });
+ const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+ const a=document.createElement("a");
+ a.href=URL.createObjectURL(blob);
+ a.download="mesures_chute_libre.csv";
+ a.click();
+};
+
+// Lancement immédiat
+updateCanvas();
+</script>
+</body>
+</html>
